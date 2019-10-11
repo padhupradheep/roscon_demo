@@ -4,31 +4,15 @@ import rospy
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal, MoveBaseActionGoal
 from actionlib_msgs.msg import GoalID
+from moveit_commander import RobotCommander, MoveGroupCommander
 import termios
 import threading
 import sys
+import moveit_commander
+from visualization_msgs.msg import Marker
 import select
 import tty
 import termios
-
-
-
-class NonBlockingConsole(object):
-
-	def __enter__(self):
-		self.old_settings = termios.tcgetattr(sys.stdin)
-		tty.setcbreak(sys.stdin.fileno())
-		return self
-
-	def __exit__(self, type, value, traceback):
-		termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
-
-
-	def get_data(self):
-		if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
-			return sys.stdin.read(1)
-		return False
-
 
 class Pause():
 	def __init__(self):
@@ -53,13 +37,13 @@ class Pause():
 
 		if(flag1 == 0):
 			flag1 = 1
-			return -5,0,0,0.1, flag1
+			return -1.1,-0.02,0,0.017, flag1
 		elif(flag1 == 1):
 			flag1 = 2
-			return 5,0,0,0.1, flag1
+			return 3.19,-0.19,0,0.999, flag1
 		elif(flag1 == 2):
 			flag1 = 0
-			return -3,0,0,0.1, flag1
+			return -4.25,-2.93,0,0.99, flag1
 
 
 	def state_movebase_client(self,x,y,z,w):
@@ -71,9 +55,9 @@ class Pause():
 		self.goal.target_pose.pose.position.y = y
 		self.goal.target_pose.pose.orientation.z = z
 		self.goal.target_pose.pose.orientation.w = w
-		self.client.send_goal(self.goal)
-		while self.client.get_state()!=actionlib.GoalStatus.SUCCEEDED:
-			pass
+		self.visualization_markers(x,y,z,w)
+		self.client.send_goal_and_wait(self.goal, rospy.Duration(30))
+
 
 	def state_wait(self,flag3):
 		now = 0
@@ -88,14 +72,12 @@ class Pause():
 			print("Moving to state 2")
 			return True
 		elif(flag3 == 2):
-			print("Moving to state 3")
+			rospy.loginfo("Moving to state 3")
 			return True
 
 	def state_paused(self,):
 		# cancel goal
-		# client = actionlib.SimpleActionClient('move_base',MoveBaseAction)
-		# goal = MoveBaseGoal()
-		# client.cancel_goal()
+
 		cancel_pub = rospy.Publisher('move_base/cancel', GoalID, queue_size=1)
 		connections = cancel_pub.get_num_connections()
 		try:
@@ -113,6 +95,33 @@ class Pause():
 		else:
 			self.id_goal.append(self.goalid1)
 
+	def visualization_markers(self,x,y,z,w):
+		mark = rospy.Publisher('Visualization_markers', Marker, queue_size=10)
+		Markers = Marker()
+		Markers.header.frame_id = "map"
+		Markers.header.stamp = rospy.Time.now()
+		Markers.ns = "goals"
+		Markers.action = Markers.ADD
+		Markers.type = Markers.ARROW
+		Markers.id = 0
+		Markers.scale.x = 0.5
+		Markers.scale.y = 0.1
+		Markers.scale.z = 0.1
+		Markers.color.a = 1.0
+		#markers.color.r = 1.0
+		Markers.color.g = 0.5 
+		Markers.color.b = 0.5
+		Markers.pose.orientation.w =w
+		Markers.pose.position.x = x
+		Markers.pose.position.y = y 
+		Markers.pose.position.z = 0.1
+		Markers.id = 0
+		mark.publish(Markers)
+
+
+
+
+
 def main():
 	global state
 	global pause_active
@@ -120,40 +129,36 @@ def main():
 	state = 0
 	pause_active = False
 	rospy.init_node('movebase_client_py')
+	# robot = moveit_commander.RobotCommander()
+	# scene = moveit_commander.PlanningSceneInterface()
+	# group = moveit_commander.MoveGroupCommander("arm")
+	# group.set_named_target("initial")
+	# group.go()
+
+
 	p = Pause()
 
-	with NonBlockingConsole() as nbc:
-		while not rospy.is_shutdown():
-	#state machine
-			if state == 0:
-				flag1 = p.state_start_up()
-				state = 1
-			elif state == 1:
-				x,y,z,w,flag1 = p.state_send_goals(flag1)
-				state = 2
-			elif state == 2:
-				tr = p.state_movebase_client(x,y,z,w)
-				state = 3
-			elif state == 3:
-				sub = rospy.Subscriber('/move_base/goal',MoveBaseActionGoal, p.goalid)
-				p.state_wait(flag1)
-				state = 1
-			elif state == 4:
-				p.state_paused()
-				if nbc.get_data() == '\x1b' and pause_active == True: 
-					state = 1
-					flag1 = 0
-					pause_active = False
-					print("Unpausing the system")
-			else:
-				print "ERROR"
-				
-			if nbc.get_data() == '\x1b' and pause_active == False: 
-				print("pausing the system")
-				state = 4
-				pause_active = True
-				pressed = True	
+	if(rospy.is_shutdown()):
+		print("Came here")
+		client = actionlib.SimpleActionClient('move_base',MoveBaseAction)
+		goal = MoveBaseGoal()
+		client.cancel_goal()
 
+	while not rospy.is_shutdown():
+#state machine
+		if state == 0:
+			flag1 = p.state_start_up()
+			state = 1
+		elif state == 1:
+			x,y,z,w,flag1 = p.state_send_goals(flag1)
+			state = 2
+		elif state == 2:
+			tr = p.state_movebase_client(x,y,z,w)
+			state = 3
+		elif state == 3:
+			sub = rospy.Subscriber('/move_base/goal',MoveBaseActionGoal, p.goalid)
+			p.state_wait(flag1)
+			state = 1
 
 
 				
@@ -174,5 +179,7 @@ def main():
 
 if __name__ == '__main__':
 	main()
+
+
 
 	
